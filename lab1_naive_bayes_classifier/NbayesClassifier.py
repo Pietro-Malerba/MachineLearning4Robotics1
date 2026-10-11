@@ -1,8 +1,12 @@
 import pandas as pd
 import numpy as np
+import re
+import warnings
+from io import StringIO
+import random
 
 
-class DiscreteNaiveBayes:
+class Nbayes:
     # Flag per tracciare lo stato di addestramento del modello
     trained = False
 
@@ -10,7 +14,7 @@ class DiscreteNaiveBayes:
         # Parametro per il Laplace smoothing
         self.a = a
 
-    def fit(self, X_train, Y_train):
+    def fit(self, X_train, Y_train, levels=None):
         # Identifica le classi uniche nel target
         self.classes = np.unique(Y_train)
         self.prior = {}
@@ -20,6 +24,11 @@ class DiscreteNaiveBayes:
             self.prior[c] = np.sum(Y_train == c) / len(Y_train)
 
         self.cond_prob = {}
+        self.levels = list(levels) if levels is not None else [
+            X_train[col].nunique() for col in X_train.columns
+        ]
+        if len(self.levels) != len(X_train.columns):
+            raise ValueError("Il numero di livelli deve corrispondere agli attributi.")
         
         # Calcola le probabilità condizionate
         for c in self.classes:
@@ -29,7 +38,7 @@ class DiscreteNaiveBayes:
 
             for col in X_train.columns:
                 self.cond_prob[c][col] = {}
-                n_unique_values = len(np.unique(X_train[col]))
+                n_unique_values = self.levels[X_train.columns.get_loc(col)]
 
                 # Calcola frequenze e applica il Laplace smoothing
                 for val in np.unique(X_train[col]):
@@ -47,7 +56,17 @@ class DiscreteNaiveBayes:
         y_predict = []
 
         # Itera sulle osservazioni per predire la classe
-        for _, row in X_test.iterrows():
+        for index, row in X_test.iterrows():
+            if any(
+                row[col] not in self.cond_prob[c][col]
+                for col in X_test.columns
+                for c in self.classes
+            ):
+                warnings.warn(
+                    f"Pattern {index} scartato: contiene valori non presenti nel training set.",
+                    UserWarning,
+                )
+                continue
             posteriors = {}
 
             # Calcola la probabilità a posteriori per ciascuna classe
@@ -56,14 +75,7 @@ class DiscreteNaiveBayes:
                 posterior = np.log(self.prior[c])
 
                 for col in X_test.columns:
-                    v = len(np.unique(X_test[col])) if col in X_test.columns else 1
-                    
-                    # Recupera la probabilità o ne stima una per valori non visti
-                    if row[col] in self.cond_prob[c][col]:
-                        prob = self.cond_prob[c][col][row[col]]
-                    else:
-                        prob = self.a / (len(self.cond_prob[c][col]) + self.a * v)
-
+                    prob = self.cond_prob[c][col][row[col]]
                     posterior += np.log(prob)
 
                 posteriors[c] = posterior
@@ -78,15 +90,34 @@ class DiscreteNaiveBayes:
             raise ValueError("Modello non addestrato.")
 
         # Genera predizioni e ne valuta l'accuratezza rispetto ai valori reali
+        valid_indices = [
+            index for index, row in X_test.iterrows()
+            if all(
+                row[col] in self.cond_prob[c][col]
+                for col in X_test.columns
+                for c in self.classes
+            )
+        ]
         y_predict = self.predict(X_test)
-        accuracy = (np.array(Y_test) == np.array(y_predict)).sum() / len(Y_test)
+        y_valid = np.asarray(Y_test)[X_test.index.get_indexer(valid_indices)]
+        if len(y_valid) == 0:
+            raise ValueError("Nessun pattern valido nel test set.")
+        accuracy = (y_valid == np.array(y_predict)).sum() / len(y_valid)
         return accuracy
 
 
 def read(file, hasHeader=False, separator=',', na_values='?'):
+    with open(file, encoding='utf-8') as source:
+        lines = source.readlines()
+
+    levels = None
+    if lines and re.fullmatch(r'\s*\[[^\]]*\]\s*', lines[0]):
+        metadata = lines.pop(0).strip()
+        levels = [int(value.strip()) for value in metadata[1:-1].split(',')]
+
     # Importa i dati forzandoli a stringa
     data = pd.read_csv(
-        file,
+        StringIO(''.join(lines)),
         sep=separator,
         engine='python',
         header=0 if hasHeader else None,
@@ -110,14 +141,56 @@ def read(file, hasHeader=False, separator=',', na_values='?'):
         }
     )
 
-    return data_clean, summary_df
+    feature_count = data_clean.shape[1] - 1
+    if levels is None:
+        levels = [data_clean.iloc[:, col].nunique() for col in range(feature_count)]
+    if len(levels) != feature_count:
+        raise ValueError("La riga dei livelli deve descrivere tutti gli attributi.")
+
+    return data_clean, summary_df, levels
+
+
+def binarize_iris(train, test, target_col_index=-1, use_median=False):
+    # Calcola l'indice della colonna target se è negativo
+    if target_col_index < 0:
+        target_col_index = train.shape[1] + target_col_index
+
+    # Verifica che il dataset abbia quattro attributi e una classe
+    if train.shape[1] != 5 or test.shape[1] != 5:
+        raise ValueError("Iris deve contenere quattro attributi e una classe.")
+
+    train_binarized = train.copy()
+    test_binarized = test.copy()
+    thresholds = {}
+
+    # Seleziona le colonne degli attributi da binarizzare
+    feature_columns = [
+        column for position, column in enumerate(train.columns)
+        if position != target_col_index
+    ]
+    for column in feature_columns:
+        # Converte i valori della colonna in numeri e calcola la soglia
+        train_values = pd.to_numeric(train[column], errors='raise')
+        test_values = pd.to_numeric(test[column], errors='raise')
+        threshold = (
+            train_values.median() if use_median else train_values.mean()
+        )
+        thresholds[column] = threshold
+
+        # Trasforma i valori in 1 se superano la soglia, altrimenti in 0
+        train_binarized[column] = (train_values > threshold).astype(int)
+        test_binarized[column] = (test_values > threshold).astype(int)
+
+    return train_binarized, test_binarized, thresholds
 
 
 def main():
     # Dataset di riferimento: 
     #   Breast Cancer -> 0
     #   Weather -> 1
-    esempio = 1
+    #   Iris binarizzato -> 2
+    esempio = 2
+    view_summary = False
 
     # Parametri operativi
     if esempio == 0:
@@ -127,8 +200,6 @@ def main():
         separator = ','
         na_values = '?'
         a_smoothing = 1.0
-        view_summary = True
-        
     elif esempio == 1:
         file_path = "weather/weather.data"
         target_col_index = -1
@@ -136,12 +207,20 @@ def main():
         separator = r'\s+'
         na_values = '?'
         a_smoothing = 1.0
-        view_summary = True
+    elif esempio == 2:
+        file_path = "iris/iris.data"
+        target_col_index = -1
+        hasHeader = False
+        separator = ','
+        na_values = '?'
+        a_smoothing = 1.0
     else:
-        raise ValueError("Esempio non valido. Scegliere 0 o 1.")
+        raise ValueError("Esempio non valido. Scegliere 0, 1 o 2.")
 
     # Lettura ed estrazione del dataset e del riassunto
-    data, summary = read(file_path, hasHeader=hasHeader, separator=separator, na_values=na_values)
+    data, summary, levels = read(
+        file_path, hasHeader=hasHeader, separator=separator, na_values=na_values
+    )
 
     if view_summary:
         print("Summary Informativo:")
@@ -156,10 +235,29 @@ def main():
     X = data.drop(data.columns[target_col_index], axis=1)
 
     # Crea, addestra e testa il classificatore
-    model = DiscreteNaiveBayes(a=a_smoothing)
-    model.fit(X, y)
+    model = Nbayes(a=a_smoothing)
+    train = data.sample(frac=0.8, random_state=random.randint(0, 10000)) 
+    test = data.drop(train.index)
 
-    accuracy = model.test(X, y)
+    if esempio == 2:
+        train, test, thresholds = binarize_iris(
+            train,
+            test,
+            target_col_index=target_col_index,
+        )
+        levels = [2] * (train.shape[1] - 1)
+        if view_summary:
+            print("Soglie usate per la binarizzazione:")
+            print(thresholds)
+
+    X_train = train.drop(train.columns[target_col_index], axis=1)
+    y_train = train.iloc[:, target_col_index]
+    X_test = test.drop(test.columns[target_col_index], axis=1)
+    y_test = test.iloc[:, target_col_index]
+
+    model.fit(X_train, y_train, levels=levels)
+
+    accuracy = model.test(X_test, y_test)
     print(f"Accuratezza del modello: {accuracy * 100:.2f}%")
 
 

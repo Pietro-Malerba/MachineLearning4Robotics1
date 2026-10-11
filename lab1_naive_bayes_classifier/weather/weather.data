@@ -1,3 +1,4 @@
+[3, 3, 2, 2]
 #Outlook   Temperature  Humidity  Windy  Play
 overcast   hot          high      FALSE  yes
 overcast   cool         normal    TRUE   yes
