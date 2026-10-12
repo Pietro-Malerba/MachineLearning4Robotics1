@@ -14,7 +14,7 @@ class Nbayes:
         # Parametro per il Laplace smoothing
         self.a = a
 
-    def fit(self, X_train, Y_train, levels=None):
+    def fit(self, X_train, Y_train, levels=None, categories=None):
         # Identifica le classi uniche nel target
         self.classes = np.unique(Y_train)
         self.prior = {}
@@ -24,6 +24,12 @@ class Nbayes:
             self.prior[c] = np.sum(Y_train == c) / len(Y_train)
 
         self.cond_prob = {}
+        self._feature_columns = X_train.columns
+        self._y_train = Y_train
+        self.categories = {
+            column: set(values)
+            for column, values in (categories or {}).items()
+        }
         self.levels = list(levels) if levels is not None else [
             X_train[col].nunique() for col in X_train.columns
         ]
@@ -49,6 +55,23 @@ class Nbayes:
 
         self.trained = True
 
+    def _probability(self, class_value, column, value):
+        # Return a smoothed likelihood, including an unseen valid level
+        probabilities = self.cond_prob[class_value][column]
+        if value in probabilities:
+            return probabilities[value]
+
+        if value not in self.categories.get(column, set()):
+            return None
+
+        column_position = self._feature_columns.get_loc(column)
+        number_of_levels = self.levels[column_position]
+        if len(probabilities) >= number_of_levels:
+            return None
+
+        class_count = np.sum(self._y_train == class_value)
+        return self.a / (class_count + self.a * number_of_levels)
+
     def predict(self, X_test):
         if not self.trained:
             raise ValueError("Modello non addestrato.")
@@ -58,7 +81,7 @@ class Nbayes:
         # Itera sulle osservazioni per predire la classe
         for index, row in X_test.iterrows():
             if any(
-                row[col] not in self.cond_prob[c][col]
+                self._probability(c, col, row[col]) is None
                 for col in X_test.columns
                 for c in self.classes
             ):
@@ -75,7 +98,7 @@ class Nbayes:
                 posterior = np.log(self.prior[c])
 
                 for col in X_test.columns:
-                    prob = self.cond_prob[c][col][row[col]]
+                    prob = self._probability(c, col, row[col])
                     posterior += np.log(prob)
 
                 posteriors[c] = posterior
@@ -93,7 +116,7 @@ class Nbayes:
         valid_indices = [
             index for index, row in X_test.iterrows()
             if all(
-                row[col] in self.cond_prob[c][col]
+                self._probability(c, col, row[col]) is not None
                 for col in X_test.columns
                 for c in self.classes
             )
@@ -189,7 +212,7 @@ def main():
     #   Breast Cancer -> 0
     #   Weather -> 1
     #   Iris binarizzato -> 2
-    esempio = 2
+    esempio = 1
     view_summary = False
 
     # Parametri operativi
@@ -250,12 +273,18 @@ def main():
             print("Soglie usate per la binarizzazione:")
             print(thresholds)
 
+    categories = {
+        column: pd.concat([train[column], test[column]]).unique()
+        for column in train.columns
+        if column != train.columns[target_col_index]
+    }
+
     X_train = train.drop(train.columns[target_col_index], axis=1)
     y_train = train.iloc[:, target_col_index]
     X_test = test.drop(test.columns[target_col_index], axis=1)
     y_test = test.iloc[:, target_col_index]
 
-    model.fit(X_train, y_train, levels=levels)
+    model.fit(X_train, y_train, levels=levels, categories=categories)
 
     accuracy = model.test(X_test, y_test)
     print(f"Accuratezza del modello: {accuracy * 100:.2f}%")
