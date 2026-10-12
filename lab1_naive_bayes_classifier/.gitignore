@@ -41,4 +41,4 @@ DS_Store
 
 # Assignment files (zip and pdf)
 *.zip
-*.pdf
+*.pdf.DS_Store
