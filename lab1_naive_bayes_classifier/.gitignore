@@ -38,3 +38,7 @@ htmlcov/
 .vscode/
 .DS_Store
 DS_Store
+
+# Assignment files (zip and pdf)
+*.zip
+*.pdf
