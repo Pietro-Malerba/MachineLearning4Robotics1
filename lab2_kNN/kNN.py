@@ -1,18 +1,26 @@
 from keras.datasets import mnist
 import numpy as np
+import matplotlib.pyplot as plt
 
 # kNN classifier
 class Knn:
     # constructor
-    def __init__(self, k=3):
+    def __init__(self, k=3, batch_size=128):
+        if k < 1:
+            raise ValueError("k must be at least 1")
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
         self.k = k
+        self.batch_size = batch_size
         self.X_train = None
+        self.X_train_flattened = None
         self.y_train = None
         self.isTrained = False
 
     # fit method
     def fit(self, X, y):
         self.X_train = X
+        self.X_train_flattened = X.reshape(X.shape[0], -1).astype(np.float32)
         self.y_train = y
         self.isTrained = True
 
@@ -21,26 +29,41 @@ class Knn:
         if not self.isTrained:
             raise Exception("Model is not trained yet. Call fit() before predict().")
 
-        # flattening delle immagini in vettori
-        X_flattened = X.reshape(X.shape[0], -1)
-        X_train_flattened = self.X_train.reshape(self.X_train.shape[0], -1)
+        if self.k > len(self.X_train):
+            raise ValueError("k cannot be greater than the number of training samples")
 
-        # calcolo delle distanze euclidee tra i campioni di test e quelli di training
-        distances = np.linalg.norm(X_flattened[:, np.newaxis] - X_train_flattened, axis=2)
+        # Avoid allocating the full test-by-training distance matrix. For MNIST
+        # that matrix is large enough to make the operating system kill Python.
+        X_flattened = X.reshape(X.shape[0], -1).astype(np.float32)
+        X_train_flattened = self.X_train_flattened
+        train_squared_norms = np.sum(X_train_flattened ** 2, axis=1)
 
-        # selezione dei k vicini più vicini
-        k_nearest_indices = np.argsort(distances, axis=1)[:, :self.k]
-        k_nearest_labels = self.y_train[k_nearest_indices]
+        print("Flattened images")
 
-        # predizioni finali basate sul voto di maggioranza dei k nearest neighbours
         predictions = []
-        for labels in k_nearest_labels:
-            unique, counts = np.unique(labels, return_counts=True)
-            majority_vote = unique[np.argmax(counts)]
-            predictions.append(majority_vote)
+        for start in range(0, len(X_flattened), self.batch_size):
+            batch = X_flattened[start:start + self.batch_size]
 
-        return predictions
+            # ||a-b||² = ||a||² + ||b||² - 2a·b; only one batch is held in memory.
+            distances = (
+                np.sum(batch ** 2, axis=1, keepdims=True)
+                + train_squared_norms
+                - 2 * batch @ X_train_flattened.T
+            )
+            nearest_indices = np.argpartition(
+                distances, self.k - 1, axis=1
+            )[:, :self.k]
 
+            for labels in self.y_train[nearest_indices]:
+                unique, counts = np.unique(labels, return_counts=True)
+                predictions.append(unique[np.argmax(counts)])
+
+            print(f"Processed {min(start + self.batch_size, len(X_flattened))}/"
+                  f"{len(X_flattened)} images")
+
+        print("Predictions made")
+
+        return np.asarray(predictions)
 
 
 def main():
