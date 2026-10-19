@@ -1,6 +1,5 @@
 from keras.datasets import mnist
 import numpy as np
-import matplotlib.pyplot as plt
 
 # kNN classifier
 class Knn:
@@ -19,10 +18,20 @@ class Knn:
 
     # fit method
     def fit(self, X, y):
+        X = np.asarray(X)
+        y = np.asarray(y)
+        if X.ndim < 2:
+            raise ValueError("X must contain at least one sample dimension")
+        if len(X) != len(y):
+            raise ValueError("X and y must contain the same number of samples")
+        if len(X) == 0:
+            raise ValueError("the training set cannot be empty")
+
         self.X_train = X
-        self.X_train_flattened = X.reshape(X.shape[0], -1).astype(np.float32)
+        self.X_train_flattened = X.reshape(len(X), -1).astype(np.float32)
         self.y_train = y
         self.isTrained = True
+        return self
 
     # predict method
     def predict(self, X):
@@ -32,37 +41,31 @@ class Knn:
         if self.k > len(self.X_train):
             raise ValueError("k cannot be greater than the number of training samples")
 
-        # Avoid allocating the full test-by-training distance matrix. For MNIST
-        # that matrix is large enough to make the operating system kill Python.
-        X_flattened = X.reshape(X.shape[0], -1).astype(np.float32)
-        X_train_flattened = self.X_train_flattened
-        train_squared_norms = np.sum(X_train_flattened ** 2, axis=1)
-
-        print("Flattened images")
+        X = np.asarray(X)
+        if X.ndim < 2:
+            raise ValueError("X must contain at least one sample dimension")
+        X_flattened = X.reshape(len(X), -1).astype(np.float32)
+        if X_flattened.shape[1] != self.X_train_flattened.shape[1]:
+            raise ValueError("training and prediction samples have different shapes")
 
         predictions = []
         for start in range(0, len(X_flattened), self.batch_size):
             batch = X_flattened[start:start + self.batch_size]
-
-            # ||a-b||² = ||a||² + ||b||² - 2a·b; only one batch is held in memory.
+            # Squared Euclidean distances, computed without Python loops.
             distances = (
                 np.sum(batch ** 2, axis=1, keepdims=True)
-                + train_squared_norms
-                - 2 * batch @ X_train_flattened.T
+                + np.sum(self.X_train_flattened ** 2, axis=1)
+                - 2 * batch @ self.X_train_flattened.T
             )
-            nearest_indices = np.argpartition(
-                distances, self.k - 1, axis=1
-            )[:, :self.k]
+            nearest = np.argpartition(distances, self.k - 1, axis=1)[:, :self.k]
+            for indices in nearest:
+                labels, counts = np.unique(self.y_train[indices], return_counts=True)
+                predictions.append(labels[np.argmax(counts)])
 
-            for labels in self.y_train[nearest_indices]:
-                unique, counts = np.unique(labels, return_counts=True)
-                predictions.append(unique[np.argmax(counts)])
+            processed = min(start + len(batch), len(X_flattened))
+            print(f"Processed {processed}/{len(X_flattened)} samples", end='\r')
 
-            print(f"Processed {min(start + self.batch_size, len(X_flattened))}/"
-                  f"{len(X_flattened)} images")
-
-        print("Predictions made")
-
+        print()  # Print a newline after the progress indicator
         return np.asarray(predictions)
 
 
@@ -75,7 +78,7 @@ def main():
     predictions = knn.predict(X_test)
 
     # calculate accuracy
-    accuracy = np.mean(predictions == y_test)
+    accuracy = sum(p == t for p, t in zip(predictions, y_test)) / len(y_test)
     print(f"Accuracy: {accuracy * 100:.2f}%")
 
 
