@@ -44,12 +44,12 @@ class Knn:
         return np.array(predictions)
 
 
-    
+
 def main():
     (X_train, y_train), (X_test, y_test) = mnist.load_data()
 
     # create a kNN classifier
-    knn = Knn(k=3, batch_size=256)
+    knn = Knn(k=3, batch_size=128)
     knn.fit(X_train, y_train)
     predictions = knn.predict(X_test)
 
