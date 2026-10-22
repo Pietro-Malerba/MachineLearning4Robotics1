@@ -12,12 +12,18 @@ class Knn:
         self.y = None
         self.min_X = None
         self.max_X = None
+        self.scale = None
 
     def fit(self, X_train, y_train):
         # normalise the training data
         self.min_X = np.min(X_train, axis=0)
         self.max_X = np.max(X_train, axis=0)
-        X_normalised = (X_train - self.min_X) / (self.max_X - self.min_X)
+
+        # correction if there are zeros at the denominator
+        self.scale = self.max_X - self.min_X
+        self.scale[self.scale == 0] = 1.0
+
+        X_normalised = (X_train - self.min_X) / self.scale
         self.X = X_normalised
         self.y = y_train
 
@@ -36,9 +42,8 @@ class Knn:
 
         return np.array(predictions)
 
-    def test(self, X_test, y_test):
-        predictions = self.predict(X_test)
-        accuracy = np.mean(predictions == y_test)
+    def test(self, y_test, y_pred):
+        accuracy = np.mean(y_pred == y_test)
         return accuracy
 
 
@@ -62,7 +67,8 @@ def main(k, n_train=100, n_test=78, random_state=5839759):
     # create a kNN classifier
     knn = Knn(_k = k)
     knn.fit(X_train, y_train)
-    accuracy = knn.test(X_test, y_test)
+    y_pred = knn.predict(X_test)
+    accuracy = knn.test(y_test, y_pred)
     return accuracy
 
 
